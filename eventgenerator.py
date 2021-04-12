@@ -6,7 +6,6 @@ HITEFFICIENCY = 0.95
 PLANEXMAX  = 50
 PLANEZTHICKNESS = 1
 PARTICLEMULTIPLICITY = 10
-MISAlIGNMENTPLANE3 = -0.05
 
 def momentum( omega ) : return ECHARGE*BFIELD/omega
 def omega( momentum ) : return ECHARGE*BFIELD/momentum
@@ -21,14 +20,15 @@ class DetectorPlane:
 
 class SensorPlane(DetectorPlane):
     __slots__ = [ "_resolution", "_alignmentbias" ]
-    def __init__(self, z, misalignment=0):
+    def __init__(self, z, misalignment=0.0):
         DetectorPlane.__init__(self,z)
         self._resolution   = RESOLUTION
         self._alignmentbias = misalignment
     def isSensor(self) : return True
     def resolution(self) : return self._resolution
     def dz(self): return 2.0
-    def alignmentbias(self): return self._alignmentbias
+    def alignmentBias(self): return self._alignmentbias
+    def setAlignmentBias(self,b): self._alignmentbias = b
 
 class Detector:
     __slots__ = ["_planes"]
@@ -41,9 +41,11 @@ def configureDetector( mode=1 ):
     z1 = 40
     z2 = 190
     dz = (z2 - z1)/(numplanes-1)
-    misalignments = numplanes*[ 0.0 ]
-    misalignments[3] = MISAlIGNMENTPLANE3
-    det = Detector(planes = [ SensorPlane(z1 + i*dz,misalignments[i]) for i in range(numplanes) ])
+    det = Detector(planes = [ SensorPlane(z1 + i*dz) for i in range(numplanes) ])
+
+    # misalign one plane
+    if mode==2: det.planes()[3].setAlignmentBias(-1.0)
+    
     return det
 
 def drawDetector( axis, detector ):
@@ -81,25 +83,29 @@ class Hit:
         self._truestate = state
         self._x = x
     def x(self) : return self._x
-    def z(self) : return self._plane.z()
+    def z(self) : return self.plane().z()
+    def plane(self) : return self._plane
         
 class Particle:
-    __slots__ = ["_hits"]
-    def __init__(self, hits):
+    __slots__ = ["_stateAtOrigin","_hits"]
+    def __init__(self, stateAtOrigin, hits):
+        self._stateAtOrigin = stateAtOrigin
         self._hits = hits
     def hits(self): return self._hits
+    def stateAtOrigin(self): return self._stateAtOrigin
 
 class Event:
     __slots__ = [ "_particles" ]
     def __init__( self, particles ) :
         self._particles = particles
     def hits(self) :
-        return [ hit for p in self._particles for hit in p.hits()  ]
+        return sorted([ hit for p in self._particles for hit in p.hits()  ], key = lambda h: h.z() )
     def particles(self):
         return self._particles
     
 def generateParticle( detector, minnumhits ):
     import numpy as np
+    import copy
     from numpy import random
     xmax  = 5    # mm
     txmax = 0.3  # rad
@@ -107,6 +113,7 @@ def generateParticle( detector, minnumhits ):
     tx0 = txmax * (random.rand()-0.5)
     # for now, no scattering
     state = State( 0, np.array( [x0,tx0] ) )
+    stateAtOrigin = copy.deepcopy(state)
     hits = []
     for p in detector.planes():
         if p.isSensor():
@@ -114,10 +121,10 @@ def generateParticle( detector, minnumhits ):
             # generate the effect on inefficiency
             if random.rand()<HITEFFICIENCY:
                 # generate effects of hit resolution and add the alignment bias
-                dx = random.normal()*p.resolution() + p.alignmentbias()
+                dx = random.normal()*p.resolution() + p.alignmentBias()
                 hits.append( Hit( p, state, state.x() + dx ) )
     if len(hits)>=minnumhits:
-        return Particle(hits)
+        return Particle(stateAtOrigin=stateAtOrigin,hits=hits)
     return None
     
 def generateEvent( detector, meanmultiplicity=PARTICLEMULTIPLICITY):
